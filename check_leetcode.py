@@ -100,7 +100,7 @@ def solve_with_gemini(problem_content, code_snippet, api_key):
 
     try:
         # 2. Correct the model name to a valid one, like 'gemini-1.5-pro'.
-        model = genai.GenerativeModel('gemini-1.5-pro', safety_settings=safety_settings)
+        model = genai.GenerativeModel('gemini-2.0-flash-001', safety_settings=safety_settings)
         
         prompt = f"""
         You are an expert LeetCode solver. Your task is to solve the following programming problem in C++.
