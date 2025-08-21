@@ -4,6 +4,10 @@ import requests
 import json
 import google.generativeai as genai
 import cloudscraper
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Create a scraper instance to handle all requests
 scraper = cloudscraper.create_scraper()
@@ -36,9 +40,15 @@ query questionDetails($titleSlug: String!) {
 }
 """
 SUBMISSION_STATUS_QUERY = """
-query submissionList($questionSlug: String!) {
-  questionSubmissionList(questionSlug: $questionSlug) {
-    submissions
+query submissionList($questionSlug: String!, $offset: Int!, $limit: Int!) {
+  questionSubmissionList(questionSlug: $questionSlug, offset: $offset, limit: $limit) {
+    submissions {
+      statusDisplay
+      lang
+      timestamp
+      runtime
+      memory
+    }
   }
 }
 """
@@ -58,14 +68,25 @@ def get_daily_challenge():
 def check_if_solved(question_slug, leetcode_session, csrf_token):
     """Checks for an 'Accepted' submission."""
     cookies = {'LEETCODE_SESSION': leetcode_session, 'csrftoken': csrf_token}
-    variables = {'questionSlug': question_slug}
+    variables = {'questionSlug': question_slug, 'offset': 0, 'limit': 20}
     payload = {'query': SUBMISSION_STATUS_QUERY, 'variables': variables}
     response = scraper.post(LEETCODE_API_URL, json=payload, cookies=cookies)
     if response.status_code == 200:
         data = response.json()
-        submissions = json.loads(data['data']['questionSubmissionList']['submissions'])
-        return any(sub['statusDisplay'] == 'Accepted' for sub in submissions)
-    return False
+        # Check for GraphQL errors
+        if 'errors' in data:
+            print(f"GraphQL errors: {data['errors']}")
+            return False
+        
+        if 'data' in data and data['data'] and 'questionSubmissionList' in data['data']:
+            submissions_list = data['data']['questionSubmissionList']['submissions']
+            # submissions is now a direct list, not a JSON string
+            if submissions_list:
+                return any(sub['statusDisplay'] == 'Accepted' for sub in submissions_list)
+        return False
+    else:
+        print(f"HTTP Error {response.status_code}: {response.text}")
+        return False
 
 # --- Gemini and Auto-Submission Functions ---
 def get_problem_details(title_slug):
