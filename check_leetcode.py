@@ -85,32 +85,56 @@ def get_problem_details(title_slug):
     return None, None
 
 def solve_with_gemini(problem_content, code_snippet, api_key):
-    """Uses Gemini to generate a solution for the problem."""
+    """Uses Gemini to generate a solution for the problem with robust error handling."""
     print("Asking Gemini for a solution...")
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.5-pro')
-    prompt = f"""
-    You are an expert LeetCode solver. Your task is to solve the following programming problem in C++.
-    Read the problem description carefully and provide a correct and efficient solution.
-    **Problem Description:**
-    {problem_content}
-    **Your task is to complete the following C++ code snippet:**
-    ```cpp
-    {code_snippet}
-    ```
-    **Instructions:**
-    1.  Provide only the complete, runnable C++ code for the solution.
-    2.  Do NOT include any explanations, comments, or markdown formatting like ```python.
-    3.  Your code should be implemented within the provided class and method structure.
-    """
-    try:
-        response = model.generate_content(prompt)
-        cleaned_code = re.sub(r'```python\n|```', '', response.text).strip()
-        return cleaned_code
-    except Exception as e:
-        print(f"Error calling Gemini API: {e}")
-        return None
 
+    # 1. Configure safety settings to be less restrictive for this use case.
+    # WARNING: Only do this if you trust the source of your prompts (i.e., LeetCode).
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+
+    try:
+        # 2. Correct the model name to a valid one, like 'gemini-1.5-pro'.
+        model = genai.GenerativeModel('gemini-1.5-pro', safety_settings=safety_settings)
+        
+        prompt = f"""
+        You are an expert LeetCode solver. Your task is to solve the following programming problem in C++.
+        Read the problem description carefully and provide a correct and efficient solution.
+        **Problem Description:**
+        {problem_content}
+        **Your task is to complete the following C++ code snippet:**
+        ```cpp
+        {code_snippet}
+        ```
+        **Instructions:**
+        1.  Provide only the complete, runnable C++ code for the solution.
+        2.  Do NOT include any explanations, comments, or markdown formatting like ```cpp.
+        3.  Your code should be implemented within the provided class and method structure.
+        """
+        
+        response = model.generate_content(prompt)
+
+        # 3. Add robust error handling before trying to access the text.
+        # This checks if the response was blocked by safety filters.
+        if not response.parts:
+            # Check the prompt feedback for the specific block reason
+            block_reason = response.prompt_feedback.block_reason
+            print(f"Error: Gemini API blocked the prompt. Reason: {block_reason}")
+            return None
+
+        # 4. Correct the regex to look for 'cpp' since you are asking for C++.
+        cleaned_code = re.sub(r'```cpp\n|```', '', response.text).strip()
+        return cleaned_code
+
+    except Exception as e:
+        print(f"An unexpected error occurred with the Gemini API: {e}")
+        return None
+    
 def submit_solution(question_id, question_slug, solution_code, leetcode_session, csrf_token):
     """Submits the generated solution to LeetCode."""
     print("Submitting the solution to LeetCode...")
