@@ -4,10 +4,60 @@ import requests
 import json
 import google.generativeai as genai
 import cloudscraper
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
+# --- Selenium Login Function ---
+def get_leetcode_cookies(username, password):
+    """Logs into LeetCode using a headless browser to get fresh cookies."""
+    print("Launching headless browser to log into LeetCode...")
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080")
+    
+    driver = webdriver.Chrome(options=chrome_options)
+    
+    try:
+        driver.get("https://leetcode.com/accounts/login/")
+        
+        # Wait for the username field and type credentials
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "id_login"))
+        ).send_keys(username)
+        
+        driver.find_element(By.ID, "id_password").send_keys(password)
+        driver.find_element(By.ID, "signin_btn").click()
+        
+        # Wait for a successful login by checking for the user avatar link
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "a.user-avatar-link"))
+        )
+        print("Login successful! Extracting cookies.")
+        
+        cookies = driver.get_cookies()
+        
+        leetcode_session = next((c['value'] for c in cookies if c['name'] == 'LEETCODE_SESSION'), None)
+        csrf_token = next((c['value'] for c in cookies if c['name'] == 'csrftoken'), None)
+        
+        if leetcode_session and csrf_token:
+            print("Successfully extracted LEETCODE_SESSION and csrftoken.")
+        
+        return leetcode_session, csrf_token
+        
+    except Exception as e:
+        print(f"An error occurred during automated login: {e}")
+        driver.save_screenshot('login_error.png') # Helps debug in GitHub Actions
+        return None, None
+    finally:
+        driver.quit()
+        
 # Create a scraper instance to handle all requests
 scraper = cloudscraper.create_scraper()
-
 # --- LeetCode API and GraphQL Details ---
 LEETCODE_API_URL = "https://leetcode.com/graphql"
 LEETCODE_BASE_URL = "https://leetcode.com"
@@ -156,14 +206,17 @@ def submit_solution(question_id, question_slug, solution_code, leetcode_session,
 
 # --- Main Execution Logic ---
 def main():
-    leetcode_session = os.environ.get('LEETCODE_SESSION')
-    csrf_token = os.environ.get('CSRF_TOKEN')
+    leetcode_username = os.environ.get('LEETCODE_USERNAME')
+    leetcode_password = os.environ.get('LEETCODE_PASSWORD')
     gemini_api_key = os.environ.get('GEMINI_API_KEY')
-    
-    if not all([leetcode_session, csrf_token, gemini_api_key]):
+
+    if not all([leetcode_username, leetcode_password, gemini_api_key]):
         print("One or more environment variables are missing.")
         return
-
+    leetcode_session, csrf_token = get_leetcode_cookies(leetcode_username, leetcode_password)
+    if not leetcode_session or not csrf_token:
+        print("Failed to retrieve session tokens. Aborting workflow.")
+        return
     print("Fetching daily challenge...")
     challenge_title, challenge_slug, challenge_id, _ = get_daily_challenge()
     
