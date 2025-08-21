@@ -88,18 +88,18 @@ def solve_with_gemini(problem_content, code_snippet, api_key):
     """Uses Gemini to generate a solution for the problem."""
     print("Asking Gemini for a solution...")
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-pro')
     prompt = f"""
-    You are an expert LeetCode solver. Your task is to solve the following programming problem in Python 3.
+    You are an expert LeetCode solver. Your task is to solve the following programming problem in C++.
     Read the problem description carefully and provide a correct and efficient solution.
     **Problem Description:**
     {problem_content}
-    **Your task is to complete the following Python code snippet:**
-    ```python
+    **Your task is to complete the following C++ code snippet:**
+    ```cpp
     {code_snippet}
     ```
     **Instructions:**
-    1.  Provide only the complete, runnable Python code for the solution.
+    1.  Provide only the complete, runnable C++ code for the solution.
     2.  Do NOT include any explanations, comments, or markdown formatting like ```python.
     3.  Your code should be implemented within the provided class and method structure.
     """
