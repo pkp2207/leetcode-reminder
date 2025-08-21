@@ -21,13 +21,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # MODIFICATION: Add google-generativeai
-          pip install requests google-generativeai
+          # MODIFICATION: Add cloudscraper
+          pip install requests google-generativeai cloudscraper
           
       - name: Run LeetCode Check Script
         env:
           LEETCODE_SESSION: ${{ secrets.LEETCODE_SESSION }}
           CSRF_TOKEN: ${{ secrets.CSRF_TOKEN }}
-          # MODIFICATION: Pass the Gemini API key to the script
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python check_leetcode.py
