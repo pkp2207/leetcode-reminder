@@ -149,7 +149,7 @@ def submit_solution(question_id, question_slug, solution_code, leetcode_session,
     }
     payload = {
         "question_id": question_id,
-        "lang": "python3",
+        "lang": "c++",
         "typed_code": solution_code
     }
     
