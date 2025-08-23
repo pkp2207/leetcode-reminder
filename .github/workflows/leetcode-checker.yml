@@ -1,8 +1,14 @@
+# .github/workflows/leetcode-checker.yml
+
 name: LeetCode Daily Challenge Checker
 
 on:
+  # Schedule to run daily at 11:00 PM IST
+  # 11:00 PM IST is 17:30 UTC
   schedule:
-    - cron: '30 17 * * *' # 11:00 PM IST
+    - cron: '30 17 * * *'
+  
+  # Allows you to run this workflow manually from the Actions tab for testing
   workflow_dispatch:
 
 jobs:
@@ -21,11 +27,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests
           
       - name: Run LeetCode Check Script
         env:
           LEETCODE_SESSION: ${{ secrets.LEETCODE_SESSION }}
           CSRF_TOKEN: ${{ secrets.CSRF_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
         run: python check_leetcode.py

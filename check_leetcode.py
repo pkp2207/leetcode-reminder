@@ -1,198 +1,131 @@
+
 import os
-import re
 import requests
 import json
-import google.generativeai as genai
-import cloudscraper
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
-
-# Create a scraper instance to handle all requests
-scraper = cloudscraper.create_scraper()
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # --- LeetCode API and GraphQL Details ---
 LEETCODE_API_URL = "https://leetcode.com/graphql"
 LEETCODE_BASE_URL = "https://leetcode.com"
-
-# --- Queries ---
 DAILY_CHALLENGE_QUERY = """
 query questionOfToday {
   activeDailyCodingChallengeQuestion {
     question {
-      questionId
       title
       titleSlug
     }
   }
 }
 """
-QUESTION_DETAILS_QUERY = """
-query questionDetails($titleSlug: String!) {
-  question(titleSlug: $titleSlug) {
-    content
-    codeSnippets {
-      langSlug
-      code
-    }
-  }
-}
-"""
 SUBMISSION_STATUS_QUERY = """
-query submissionList($questionSlug: String!, $offset: Int!, $limit: Int!) {
-  questionSubmissionList(questionSlug: $questionSlug, offset: $offset, limit: $limit) {
-    submissions {
-      statusDisplay
-      lang
-      timestamp
-      runtime
-      memory
-    }
+query submissionList($questionSlug: String!) {
+  questionSubmissionList(questionSlug: $questionSlug) {
+    submissions
   }
 }
 """
 
-# --- Helper Functions ---
+# --- Function to get the daily challenge ---
 def get_daily_challenge():
-    """Fetches details of the daily challenge."""
-    response = scraper.post(LEETCODE_API_URL, json={'query': DAILY_CHALLENGE_QUERY})
+    """Fetches the title, titleSlug, and URL of the daily challenge."""
+    response = requests.post(LEETCODE_API_URL, json={'query': DAILY_CHALLENGE_QUERY})
     if response.status_code == 200:
         data = response.json()
         question = data['data']['activeDailyCodingChallengeQuestion']['question']
-        title, title_slug, question_id = question['title'], question['titleSlug'], question['questionId']
+        title = question['title']
+        title_slug = question['titleSlug']
+        # MODIFICATION: Construct the full URL to the problem
         url = f"{LEETCODE_BASE_URL}/problems/{title_slug}/"
-        return title, title_slug, question_id, url
-    return None, None, None, None
-
-def check_if_solved(question_slug, leetcode_session, csrf_token):
-    """Checks for an 'Accepted' submission."""
-    cookies = {'LEETCODE_SESSION': leetcode_session, 'csrftoken': csrf_token}
-    variables = {'questionSlug': question_slug, 'offset': 0, 'limit': 20}
-    payload = {'query': SUBMISSION_STATUS_QUERY, 'variables': variables}
-    response = scraper.post(LEETCODE_API_URL, json=payload, cookies=cookies)
-    if response.status_code == 200:
-        data = response.json()
-        # Check for GraphQL errors
-        if 'errors' in data:
-            print(f"GraphQL errors: {data['errors']}")
-            return False
-        
-        if 'data' in data and data['data'] and 'questionSubmissionList' in data['data']:
-            submissions_list = data['data']['questionSubmissionList']['submissions']
-            # submissions is now a direct list, not a JSON string
-            if submissions_list:
-                return any(sub['statusDisplay'] == 'Accepted' for sub in submissions_list)
-        return False
+        return title, title_slug, url
     else:
-        print(f"HTTP Error {response.status_code}: {response.text}")
-        return False
+        print("Error fetching daily challenge.")
+        return None, None, None
 
-# --- Gemini and Auto-Submission Functions ---
-def get_problem_details(title_slug):
-    """Gets the full problem description and C++ code snippet."""
-    variables = {'titleSlug': title_slug}
-    payload = {'query': QUESTION_DETAILS_QUERY, 'variables': variables}
-    response = scraper.post(LEETCODE_API_URL, json=payload)
-    if response.status_code == 200:
-        question_data = response.json()['data']['question']
-        problem_content = question_data['content']
-        # FIX #1: Fetch the 'cpp' code snippet, not 'python3'
-        code_snippet = next((cs['code'] for cs in question_data['codeSnippets'] if cs['langSlug'] == 'cpp'), None)
-        return problem_content, code_snippet
-    print("Error fetching problem details.")
-    return None, None
-
-def solve_with_gemini(problem_content, code_snippet, api_key):
-    """Uses Gemini to generate a solution for the problem with robust error handling."""
-    print("Asking Gemini for a solution...")
-    genai.configure(api_key=api_key)
-
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-
-    try:
-        model = genai.GenerativeModel('gemini-2.0-flash-001', safety_settings=safety_settings)
-        
-        prompt = f"""
-        You are an expert LeetCode solver. Your task is to solve the following programming problem in C++.
-        Read the problem description carefully and provide a correct and efficient solution.
-        **Problem Description:**
-        {problem_content}
-        **Your task is to complete the following C++ code snippet:**
-        ```cpp
-        {code_snippet}
-        ```
-        **Instructions:**
-        1.  Provide only the complete, runnable C++ code for the solution.
-        2.  Do NOT include any explanations, comments, or markdown formatting like ```cpp.
-        3.  Your code should be implemented within the provided class and method structure.
-        """
-        
-        response = model.generate_content(prompt)
-
-        if not response.parts:
-            block_reason = response.prompt_feedback.block_reason
-            print(f"Error: Gemini API blocked the prompt. Reason: {block_reason}")
-            return None
-
-        cleaned_code = re.sub(r'```cpp\n|```', '', response.text).strip()
-        return cleaned_code
-
-    except Exception as e:
-        print(f"An unexpected error occurred with the Gemini API: {e}")
-        return None
-    
-def submit_solution(question_id, question_slug, solution_code, leetcode_session, csrf_token):
-    """Submits the generated solution to LeetCode."""
-    print("Submitting the solution to LeetCode...")
-    submit_url = f"{LEETCODE_BASE_URL}/problems/{question_slug}/submit/"
-    headers = {
-        'x-csrftoken': csrf_token,
-        'Referer': submit_url,
-    }
+# --- Function to check if the challenge is solved ---
+def check_if_solved(question_slug, leetcode_session, csrf_token):
+    """Checks if the user has an 'Accepted' submission for the given question."""
     cookies = {
         'LEETCODE_SESSION': leetcode_session,
         'csrftoken': csrf_token
     }
-    payload = {
-        "question_id": question_id,
-        "lang": "cpp",
-        "typed_code": solution_code
-    }
-    
-    response = scraper.post(submit_url, headers=headers, cookies=cookies, json=payload)
+    variables = {'questionSlug': question_slug}
+    payload = {'query': SUBMISSION_STATUS_QUERY, 'variables': variables}
+
+    response = requests.post(LEETCODE_API_URL, json=payload, cookies=cookies)
     
     if response.status_code == 200:
-        submission_id = response.json().get('submission_id')
-        print(f"Successfully submitted solution. Submission ID: {submission_id}")
-        return True
-    else:
-        print(f"Error submitting solution: {response.status_code} - {response.text}")
+        data = response.json()
+        submissions_str = data['data']['questionSubmissionList']['submissions']
+        submissions = json.loads(submissions_str)
+        
+        for submission in submissions:
+            if submission['statusDisplay'] == 'Accepted':
+                return True
         return False
+    else:
+        print(f"Error checking submission status: {response.status_code}")
+        print(response.text)
+        return False
+
+# --- Function to send an email alert ---
+def send_email_alert(recipient_email, sender_email, sender_password, question_title, question_url):
+    """Sends an HTML email reminder with a clickable link."""
+    subject = "LeetCode Daily Challenge Reminder!"
+    
+    # MODIFICATION: Create an HTML body for the email
+    html_body = f"""
+    <html>
+      <body>
+        <p>Hi there,</p>
+        <p>This is a reminder that you haven't solved today's LeetCode daily challenge yet: <strong>{question_title}</strong>.</p>
+        <p>Don't break your streak!</p>
+        <p>You can find the problem here: <a href="{question_url}">{question_url}</a></p>
+        <p>Best of luck!</p>
+      </body>
+    </html>
+    """
+    
+    msg = MIMEMultipart()
+    msg['Subject'] = subject
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    
+    # MODIFICATION: Attach the HTML body
+    msg.attach(MIMEText(html_body, 'html'))
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp_server:
+            smtp_server.login(sender_email, sender_password)
+            smtp_server.sendmail(sender_email, recipient_email, msg.as_string())
+        print("Email alert sent successfully.")
+    except Exception as e:
+        print(f"Failed to send email: {e}")
 
 # --- Main Execution Logic ---
 def main():
+    # Load credentials from environment variables
     leetcode_session = os.environ.get('LEETCODE_SESSION')
     csrf_token = os.environ.get('CSRF_TOKEN')
-    gemini_api_key = os.environ.get('GEMINI_API_KEY')
+    sender_email = os.environ.get('SENDER_EMAIL')
+    sender_password = os.environ.get('SENDER_PASSWORD')
+    recipient_email = os.environ.get('RECIPIENT_EMAIL')
     
-    if not all([leetcode_session, csrf_token, gemini_api_key]):
+    if not all([leetcode_session, csrf_token, sender_email, sender_password, recipient_email]):
         print("One or more environment variables are missing.")
         return
 
     print("Fetching daily challenge...")
-    challenge_title, challenge_slug, challenge_id, _ = get_daily_challenge()
+    # MODIFICATION: Unpack the new URL value from the function call
+    challenge_title, challenge_slug, challenge_url = get_daily_challenge()
     
     if not challenge_slug:
-        print("Could not retrieve daily challenge. Exiting.")
+        print("Could not retrieve daily challenge slug. Exiting.")
         return
         
     print(f"Today's challenge: {challenge_title}")
+    print(f"URL: {challenge_url}")
     
     print("Checking submission status...")
     is_solved = check_if_solved(challenge_slug, leetcode_session, csrf_token)
@@ -200,18 +133,8 @@ def main():
     if is_solved:
         print("Congratulations! You have already solved the daily challenge.")
     else:
-        print("Challenge not solved. Initiating auto-solve workflow...")
-        problem_content, code_snippet = get_problem_details(challenge_slug)
-        if not problem_content or not code_snippet:
-            print("Failed to get problem details or C++ snippet was not found.")
-            return
-
-        solution_code = solve_with_gemini(problem_content, code_snippet, gemini_api_key)
-        if not solution_code: return
-            
-        print("--- Generated Code ---\n" + solution_code + "\n----------------------")
-        
-        submit_solution(challenge_id, challenge_slug, solution_code, leetcode_session, csrf_token)
+        print("You have not solved the daily challenge yet. Sending a reminder.")
+        send_email_alert(recipient_email, sender_email, sender_password, challenge_title, challenge_url)
 
 if __name__ == "__main__":
     main()
