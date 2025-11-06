@@ -2,10 +2,10 @@ import os
 import requests
 import json
 import smtplib
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# --- LeetCode API and GraphQL Details ---
 LEETCODE_API_URL = "https://leetcode.com/graphql"
 LEETCODE_BASE_URL = "https://leetcode.com"
 DAILY_CHALLENGE_QUERY = """
@@ -26,33 +26,49 @@ query submissionList($questionSlug: String!) {
 }
 """
 
-# --- Function to programmatically get new tokens via login ---
+def extract_csrf_from_html(html):
+    match = re.search(r"name=['\"]csrfmiddlewaretoken['\"] value=['\"]([A-Za-z0-9]+)['\"]", html)
+    if match:
+        return match.group(1)
+    # Try also extracting from meta tag if present
+    match = re.search(r"name=['\"]csrf-token['\"] content=['\"](\w+)['\"]", html)
+    if match:
+        return match.group(1)
+    return None
+
 def get_fresh_leetcode_tokens():
-    username = os.environ.get('LEETCODE_USERNAME')  # set this in secrets
-    password = os.environ.get('LEETCODE_PASSWORD')  # set this in secrets
+    username = os.environ.get('LEETCODE_USERNAME')
+    password = os.environ.get('LEETCODE_PASSWORD')
     login_url = "https://leetcode.com/accounts/login/"
     session = requests.Session()
-    # Step 1: Load login page to get CSRF token from cookies
-    resp1 = session.get(login_url)
-    if 'csrftoken' not in session.cookies:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.54 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": login_url,
+    }
+    # Step 1: Initial GET for CSRF token
+    resp1 = session.get(login_url, headers=headers)
+    print("Initial GET status code:", resp1.status_code)
+    print("Initial cookies:", session.cookies.get_dict())
+    csrf_token = session.cookies.get('csrftoken')
+    if not csrf_token:
+        csrf_token = extract_csrf_from_html(resp1.text)
+        print("Extracted csrf_token from HTML:", csrf_token)
+    if not csrf_token:
         print("Failed to get initial CSRF token")
         return None, None
-    csrf_token = session.cookies['csrftoken']
-    # Step 2: Send login request
+    # Step 2: POST login
     login_payload = {
         'login': username,
         'password': password,
         'csrfmiddlewaretoken': csrf_token
     }
-    headers = {
-        'Referer': login_url,
-        'User-Agent': 'Mozilla/5.0',
-        'X-CSRFToken': csrf_token
-    }
-    resp2 = session.post(login_url, data=login_payload, headers=headers)
-    if resp2.status_code != 200:
-        print(f"Login failed with status {resp2.status_code}")
-        return None, None
+    login_headers = headers.copy()
+    login_headers["X-CSRFToken"] = csrf_token
+    resp2 = session.post(login_url, data=login_payload, headers=login_headers, allow_redirects=True)
+    print("Login POST status code:", resp2.status_code)
+    print("Post-login cookies:", session.cookies.get_dict())
     if 'LEETCODE_SESSION' not in session.cookies:
         print("Login failed or session cookie missing")
         return None, None
@@ -60,7 +76,6 @@ def get_fresh_leetcode_tokens():
     new_session = session.cookies.get('LEETCODE_SESSION')
     return new_session, new_csrf_token
 
-# --- Function to get the daily challenge ---
 def get_daily_challenge():
     response = requests.post(LEETCODE_API_URL, json={'query': DAILY_CHALLENGE_QUERY})
     if response.status_code == 200:
@@ -74,7 +89,6 @@ def get_daily_challenge():
         print("Error fetching daily challenge.")
         return None, None, None
 
-# --- Function to check if the challenge is solved ---
 def check_if_solved(question_slug, leetcode_session, csrf_token):
     cookies = {
         'LEETCODE_SESSION': leetcode_session,
@@ -96,7 +110,6 @@ def check_if_solved(question_slug, leetcode_session, csrf_token):
         print(response.text)
         return False
 
-# --- Function to send an email alert ---
 def send_email_alert(recipient_email, sender_email, sender_password, question_title, question_url):
     subject = "LeetCode Daily Challenge Reminder!"
     html_body = f"""
@@ -123,9 +136,7 @@ def send_email_alert(recipient_email, sender_email, sender_password, question_ti
     except Exception as e:
         print(f"Failed to send email: {e}")
 
-# --- Main Execution Logic ---
 def main():
-    # Get fresh tokens via login before everything else
     leetcode_session, csrf_token = get_fresh_leetcode_tokens()
     sender_email = os.environ.get('SENDER_EMAIL')
     sender_password = os.environ.get('SENDER_PASSWORD')
